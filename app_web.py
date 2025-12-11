@@ -6,13 +6,12 @@ import pandas as pd
 # ⚙️ CONFIGURACIÓN: REEMPLAZA ESTO CON TUS DATOS DE TIDB
 # ========================================================
 # --- CONFIGURACIÓN SEGURA PARA LA NUBE ---
-# Esto carga AUTOMÁTICAMENTE host, user, password y port desde los 'Secrets'
+# Esta línea carga TODO (host, port, user, pass) desde los 'Secrets' de Streamlit
 try:
     DB_CONFIG = st.secrets["mysql"]
 except FileNotFoundError:
     st.warning("⚠️ No se detectaron secretos. Configúralos en Streamlit Cloud.")
     st.stop()
-# ========================================================
 
 def get_connection():
     # Esta función conecta a la nube
@@ -184,4 +183,5 @@ elif menu == "Gestión de Equipos":
             csv = df_equipos.to_csv(index=False).encode('utf-8')
 
             f_col2.download_button("📥 Descargar CSV", data=csv, file_name="inventario.csv", mime="text/csv")
+
 
