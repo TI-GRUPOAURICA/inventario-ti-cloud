@@ -2,23 +2,28 @@ import streamlit as st
 import mysql.connector
 import pandas as pd
 
-# ========================================================
-# ⚙️ CONFIGURACIÓN: REEMPLAZA ESTO CON TUS DATOS DE TIDB
-# ========================================================
-# --- CONFIGURACIÓN SEGURA PARA LA NUBE ---
-# Esta línea carga TODO (host, port, user, pass) desde los 'Secrets' de Streamlit
+# =======================================================
+# CONFIGURACIÓN DE BASE DE DATOS (MODO NUBE)
+# =======================================================
+
+# Intentamos cargar la configuración desde los Secretos de Streamlit
 try:
+    # Esto lee automáticamente host, port, user, password de la "Caja Fuerte"
     DB_CONFIG = st.secrets["mysql"]
 except FileNotFoundError:
-    st.warning("⚠️ No se detectaron secretos. Configúralos en Streamlit Cloud.")
+    st.warning("⚠️ No se encontraron los secretos. Asegúrate de configurarlos en Streamlit Cloud (Settings > Secrets).")
     st.stop()
 
+# =======================================================
+# FUNCIONES DE BASE DE DATOS
+# =======================================================
+
 def get_connection():
-    # Esta función conecta a la nube
+    # Conecta a la base de datos usando la configuración cargada
     return mysql.connector.connect(**DB_CONFIG)
 
 def init_db():
-    # Crea las tablas automáticamente si no existen
+    # Crea las tablas si no existen (solo la primera vez)
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -48,70 +53,73 @@ def init_db():
         """)
         conn.close()
     except mysql.connector.Error as err:
-        st.error(f"❌ Error conectando a la base de datos: {err}")
-        st.stop()
+        st.error(f"❌ Error al iniciar base de datos: {err}")
 
-# --- INTERFAZ GRÁFICA WEB ---
+# =======================================================
+# INTERFAZ DE USUARIO (WEB)
+# =======================================================
+
 st.set_page_config(page_title="Inventario TI Cloud", layout="wide", page_icon="☁️")
 st.title("☁️ Sistema de Inventario TI")
 
-# Intentamos inicializar la DB al cargar
+# Inicializar DB
 init_db()
 
-# Menú lateral
+# Menú Lateral
 menu = st.sidebar.radio("Navegación", ["Gestión de Equipos", "Gestión de Obras"])
 
-# ==========================================
-# PESTAÑA: GESTIÓN DE OBRAS (SITIOS)
-# ==========================================
+# --- PESTAÑA 1: GESTIÓN DE OBRAS ---
 if menu == "Gestión de Obras":
-    st.header("🏢 Obras y Sitios")
+    st.header("🏢 Gestión de Obras / Sitios")
     
     col1, col2 = st.columns([2, 1])
     with col1:
-        nuevo_sitio = st.text_input("Nombre de la nueva Obra/Sitio")
+        nuevo_sitio = st.text_input("Nombre de la nueva Obra")
     with col2:
-        st.write("") # Espacio
-        st.write("") # Espacio
+        st.write("") 
+        st.write("") 
         if st.button("Guardar Sitio", use_container_width=True):
             if nuevo_sitio:
-                conn = get_connection()
                 try:
+                    conn = get_connection()
                     cursor = conn.cursor()
                     cursor.execute("INSERT INTO sitios (nombre) VALUES (%s)", (nuevo_sitio,))
+                    conn.commit()
                     st.success(f"✅ Sitio '{nuevo_sitio}' creado.")
+                    conn.close()
+                    st.rerun()
                 except mysql.connector.Error as err:
                     st.error(f"Error: {err}")
-                finally:
-                    conn.close()
             else:
                 st.warning("Escribe un nombre.")
 
-    # Mostrar lista
     st.divider()
-    conn = get_connection()
-    df = pd.read_sql("SELECT id, nombre FROM sitios ORDER BY id DESC", conn)
-    conn.close()
-    st.dataframe(df, hide_index=True, use_container_width=True)
+    try:
+        conn = get_connection()
+        df = pd.read_sql("SELECT id, nombre FROM sitios ORDER BY id DESC", conn)
+        conn.close()
+        st.dataframe(df, hide_index=True, use_container_width=True)
+    except:
+        st.info("No hay sitios creados aún.")
 
-# ==========================================
-# PESTAÑA: GESTIÓN DE EQUIPOS
-# ==========================================
+# --- PESTAÑA 2: GESTIÓN DE EQUIPOS ---
 elif menu == "Gestión de Equipos":
     st.header("💻 Inventario de Equipos")
 
-    # Cargar sitios para el selector
-    conn = get_connection()
-    sitios_df = pd.read_sql("SELECT id, nombre FROM sitios", conn)
-    conn.close()
-    
+    # Cargar sitios
+    try:
+        conn = get_connection()
+        sitios_df = pd.read_sql("SELECT id, nombre FROM sitios", conn)
+        conn.close()
+    except:
+        sitios_df = pd.DataFrame()
+
     if sitios_df.empty:
-        st.warning("⚠️ Primero debes crear al menos una Obra en el menú lateral.")
+        st.warning("⚠️ Primero crea una Obra en el menú 'Gestión de Obras'.")
     else:
-        # Crear diccionario {Nombre: ID}
         opciones_sitios = dict(zip(sitios_df['nombre'], sitios_df['id']))
 
-        with st.expander("➕ Agregar Nuevo Equipo", expanded=True):
+        with st.expander("➕ Registrar Nuevo Equipo", expanded=True):
             c1, c2, c3 = st.columns(3)
             codigo = c1.text_input("Código Inventario")
             tipo = c2.selectbox("Tipo", ["Laptop", "PC Escritorio"])
@@ -119,14 +127,13 @@ elif menu == "Gestión de Equipos":
             
             c4, c5, c6 = st.columns(3)
             marca = c4.text_input("Marca/Modelo")
-            usuario = c5.text_input("Usuario Asignado")
+            usuario = c5.text_input("Usuario")
             
-            # Lógica dinámica visual (Streamlit redibuja al cambiar 'tipo')
             serie, monitor = "", ""
             if tipo == "Laptop":
                 serie = c6.text_input("Nº Serie")
             else:
-                monitor = c6.text_input("Código de Monitor")
+                monitor = c6.text_input("Cód. Monitor")
             
             carac = st.text_area("Características")
             
@@ -140,27 +147,23 @@ elif menu == "Gestión de Equipos":
                             (codigo_inventario, serie, tipo, marca_modelo, usuario, caracteristicas, monitor_codigo, sitio_id)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         """
-                        # ID del sitio seleccionado
-                        id_sitio_real = opciones_sitios[sitio_sel]
-                        vals = (codigo, serie, tipo, marca, usuario, carac, monitor, id_sitio_real)
-                        
+                        vals = (codigo, serie, tipo, marca, usuario, carac, monitor, opciones_sitios[sitio_sel])
                         cursor.execute(query, vals)
-                        st.success("✅ Equipo guardado en la nube.")
-                        # Recargar página para limpiar form (truco streamlit)
-                        st.rerun() 
+                        conn.commit()
+                        st.success("✅ Guardado correctamente.")
+                        conn.close()
+                        st.rerun()
                     except mysql.connector.Error as err:
-                        st.error(f"Error de base de datos: {err}")
-                    finally:
-                        if 'conn' in locals() and conn.is_connected(): conn.close()
+                        st.error(f"Error: {err}")
                 else:
                     st.error("El código es obligatorio.")
 
-        # --- FILTROS Y TABLA ---
+        # Tabla y Filtros
         st.divider()
         f_col1, f_col2 = st.columns([3, 1])
         filtro = f_col1.selectbox("🔍 Filtrar por Obra", ["Todas"] + list(opciones_sitios.keys()))
         
-        query = """
+        query_base = """
             SELECT e.id, e.codigo_inventario as 'Código', e.tipo as 'Tipo', 
                    e.serie as 'Serie', e.marca_modelo as 'Marca', 
                    e.usuario as 'Usuario', s.nombre as 'Obra', 
@@ -171,17 +174,14 @@ elif menu == "Gestión de Equipos":
         
         conn = get_connection()
         if filtro != "Todas":
-            df_equipos = pd.read_sql(query + " WHERE s.nombre = %s", conn, params=(filtro,))
+            df_equipos = pd.read_sql(query_base + " WHERE s.nombre = %s", conn, params=(filtro,))
         else:
-            df_equipos = pd.read_sql(query + " ORDER BY e.id DESC", conn)
+            df_equipos = pd.read_sql(query_base + " ORDER BY e.id DESC", conn)
         conn.close()
 
         st.dataframe(df_equipos, hide_index=True, use_container_width=True)
         
-        # Exportar
         if not df_equipos.empty:
             csv = df_equipos.to_csv(index=False).encode('utf-8')
-
             f_col2.download_button("📥 Descargar CSV", data=csv, file_name="inventario.csv", mime="text/csv")
-
 
