@@ -7,14 +7,13 @@ import pandas as pd
 # ========================================================
 DB_CONFIG = # --- CONFIGURACIÓN SEGURA PARA LA NUBE ---
 # En lugar de escribir la contraseña aquí, le decimos que la lea de los 'Secretos'
+# --- CONFIGURACIÓN SEGURA: Lee la contraseña de la nube ---
 try:
-    # Intenta leer de la configuración de Streamlit Cloud
     DB_CONFIG = st.secrets["mysql"]
 except FileNotFoundError:
-    # Si falla (ej. estás en local sin secrets), usa esto (SOLO PARA PRUEBAS LOCALES)
-    # NO SUBAS ESTE BLOQUE ELSE A GITHUB CON TU PASS REAL
-    st.warning("⚠️ No se encontraron secretos, asegúrate de configurarlos en la nube.")
+    st.warning("⚠️ No se detectaron secretos. Si estás en local, configura tus datos manualmente.")
     st.stop()
+   
 # ========================================================
 
 def get_connection():
@@ -185,4 +184,5 @@ elif menu == "Gestión de Equipos":
         # Exportar
         if not df_equipos.empty:
             csv = df_equipos.to_csv(index=False).encode('utf-8')
+
             f_col2.download_button("📥 Descargar CSV", data=csv, file_name="inventario.csv", mime="text/csv")
