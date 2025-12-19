@@ -119,7 +119,7 @@ with tab1:
         column_config={
             "id": None, # Oculto
             "sitio_id": None, 
-            "codigo_manual": st.column_config.TextColumn("🟦 Cód. Etiqueta", help="Digita aquí el código manual", width="small"),
+            "codigo_manual": st.column_config.TextColumn("🟦 Colaborador", help="Digita aquí el código manual", width="small"),
             "detalles": st.column_config.TextColumn("📝 Detalles / Notas", width="large"),
             "usuario": st.column_config.TextColumn("Usuario Asignado", width="medium"),
             "Obra": st.column_config.SelectboxColumn("📍 Ubicación", width="medium", options=lista_obras, required=True),
@@ -225,4 +225,5 @@ with tab2:
         df_obras = pd.read_sql("SELECT nombre FROM sitios ORDER BY nombre", conn)
         conn.close()
         st.dataframe(df_obras, hide_index=True, use_container_width=True)
+
 
