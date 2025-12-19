@@ -54,7 +54,7 @@ def init_db():
         );
     """)
     
-    # 4. MIGRACIÓN: Agregar columnas nuevas (incluyendo las manuales)
+    # 4. MIGRACIÓN: Agregar columnas nuevas
     nuevas_columnas = [
         ("ram", "VARCHAR(50)"),
         ("procesador", "VARCHAR(100)"),
@@ -64,9 +64,8 @@ def init_db():
         ("antivirus", "VARCHAR(150)"),
         ("windows_ver", "VARCHAR(100)"),
         ("ultima_conexion", "DATETIME"),
-        # --- NUEVAS COLUMNAS MANUALES ---
-        ("codigo_manual", "VARCHAR(50)"), # Para tu código de etiqueta
-        ("detalles", "TEXT")              # Para notas largas
+        ("codigo_manual", "VARCHAR(50)"), 
+        ("detalles", "TEXT")              
     ]
     
     for col, tipo in nuevas_columnas:
@@ -100,7 +99,7 @@ with tab1:
     mapa_obras = dict(zip(df_sitios['nombre'], df_sitios['id'])) 
     mapa_ids = dict(zip(df_sitios['id'], df_sitios['nombre']))
 
-    # Cargar Equipos (Incluyendo las nuevas columnas manuales)
+    # Cargar Equipos (Incluyendo las nuevas columnas)
     query = """
         SELECT 
             id, codigo_inventario, codigo_manual, marca_modelo, usuario, tipo, 
@@ -123,39 +122,48 @@ with tab1:
         df_equipos,
         column_config={
             "id": None, # Oculto
-            "sitio_id": None, # Oculto (usamos la columna 'Obra')
+            "sitio_id": None, # Oculto
             
             # --- COLUMNAS MANUALES ---
-            "codigo_manual": st.column_config.TextColumn(
-                "🟦 Cód. Etiqueta", 
-                help="Digita aquí el código de activo fijo manual",
-                width="small"
-            ),
-            "detalles": st.column_config.TextColumn(
-                "📝 Detalles / Notas", 
-                help="Espacio para observaciones largas",
-                width="large"
-            ),
-            # -------------------------
+            "codigo_manual": st.column_config.TextColumn("🟦 Cód. Etiqueta", help="Digita aquí el código de activo fijo manual", width="small"),
+            "detalles": st.column_config.TextColumn("📝 Detalles / Notas", help="Espacio para observaciones largas", width="large"),
             
+            # --- COLUMNAS DE SISTEMA ---
             "usuario": st.column_config.TextColumn("Usuario Asignado", width="medium"),
-            "Obra": st.column_config.SelectboxColumn(
-                "📍 Ubicación",
-                width="medium",
-                options=lista_obras,
-                required=True
-            ),
-            "codigo_inventario": st.column_config.TextColumn("Hostname (PC)", disabled=True, help="Nombre real del equipo en red"),
+            "Obra": st.column_config.SelectboxColumn("📍 Ubicación", width="medium", options=lista_obras, required=True),
+            "codigo_inventario": st.column_config.TextColumn("Hostname (PC)", disabled=True),
             "ultima_conexion": st.column_config.DatetimeColumn("Última Conexión", format="D MMM YYYY, h:mm a", disabled=True),
             "tipo": st.column_config.SelectboxColumn("Tipo", options=["Laptop", "PC Escritorio", "Servidor"], width="small"),
+            
+            # --- COLUMNAS DE HARDWARE ---
+            "mainboard": st.column_config.TextColumn("Placa Madre", disabled=True),
+            "video": st.column_config.TextColumn("Tarjeta Video", disabled=True),
+            "antivirus": st.column_config.TextColumn("Antivirus", disabled=True),
+            "windows_ver": st.column_config.TextColumn("Sist. Operativo", disabled=True),
         },
         disabled=cols_bloqueadas, 
         num_rows="dynamic",       
         use_container_width=True,
         key="editor_equipos",
         hide_index=True,
-        column_order=("codigo_manual", "codigo_inventario", "usuario", "Obra", "detalles", "tipo", "marca_modelo", "ram", "disco", "serie", "ultima_conexion", "procesador") 
-        # ^ He reordenado las columnas para que las manuales salgan al principio
+        # AQUÍ ESTÁ EL CAMBIO: Agregué Mainboard, Video y Antivirus al orden visual
+        column_order=(
+            "codigo_manual", 
+            "codigo_inventario", 
+            "usuario", 
+            "Obra", 
+            "detalles", 
+            "tipo", 
+            "marca_modelo", 
+            "ram", 
+            "disco", 
+            "serie", 
+            "procesador", 
+            "mainboard",   # <--- AHORA SÍ APARECE
+            "video",       # <--- AHORA SÍ APARECE
+            "antivirus",   # <--- AHORA SÍ APARECE
+            "ultima_conexion"
+        ) 
     )
 
     # BOTÓN GUARDAR
@@ -167,7 +175,6 @@ with tab1:
                 nombre_obra = row['Obra']
                 id_obra_real = mapa_obras.get(nombre_obra)
                 
-                # Actualizamos también las columnas manuales
                 sql = """
                     UPDATE equipos SET 
                     usuario = %s, 
@@ -178,7 +185,6 @@ with tab1:
                     detalles = %s
                     WHERE codigo_inventario = %s
                 """
-                # Nota: 'codigo_manual' y 'detalles' se guardan aquí
                 vals = (
                     row['usuario'], id_obra_real, row['tipo'], row['marca_modelo'], 
                     row['codigo_manual'], row['detalles'], 
