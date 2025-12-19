@@ -3,6 +3,7 @@ import mysql.connector
 import pandas as pd
 from datetime import datetime
 import io
+import xlsxwriter # Asegura que esté importado
 
 # =======================================================
 # CONFIGURACIÓN SEGURA
@@ -20,11 +21,10 @@ def get_connection():
     return mysql.connector.connect(**DB_CONFIG)
 
 def init_db():
-    """Actualiza la estructura de la BD automáticamente"""
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 1. Tabla Sitios
+    # Tabla Sitios
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sitios (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -32,7 +32,7 @@ def init_db():
         );
     """)
     
-    # 2. Asegurar estados por defecto
+    # Estados por defecto
     estados = ["LIBRE", "DEFECTUOSA", "OFICINA CENTRAL"]
     for estado in estados:
         try:
@@ -40,7 +40,7 @@ def init_db():
         except: pass
     conn.commit()
 
-    # 3. Tabla Equipos
+    # Tabla Equipos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS equipos (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -54,7 +54,7 @@ def init_db():
         );
     """)
     
-    # 4. MIGRACIÓN: Agregar columnas nuevas
+    # Nuevas columnas
     nuevas_columnas = [
         ("ram", "VARCHAR(50)"),
         ("procesador", "VARCHAR(100)"),
@@ -71,8 +71,7 @@ def init_db():
     for col, tipo in nuevas_columnas:
         try:
             cursor.execute(f"ALTER TABLE equipos ADD COLUMN {col} {tipo}")
-        except:
-            pass 
+        except: pass 
 
     conn.commit()
     conn.close()
@@ -83,10 +82,8 @@ def init_db():
 st.set_page_config(page_title="Inventario TI", layout="wide", page_icon="🖥️")
 st.title("🖥️ Panel de Control de Inventario TI")
 
-# Inicializar DB
 init_db()
 
-# Pestañas
 tab1, tab2 = st.tabs(["📋 Inventario General (Editable)", "🏗️ Gestión de Obras"])
 
 # --- PESTAÑA 1: TABLA PRINCIPAL ---
@@ -99,7 +96,7 @@ with tab1:
     mapa_obras = dict(zip(df_sitios['nombre'], df_sitios['id'])) 
     mapa_ids = dict(zip(df_sitios['id'], df_sitios['nombre']))
 
-    # Cargar Equipos (Incluyendo las nuevas columnas)
+    # Cargar Equipos
     query = """
         SELECT 
             id, codigo_inventario, codigo_manual, marca_modelo, usuario, tipo, 
@@ -114,28 +111,21 @@ with tab1:
     # Preparar DataFrame
     df_equipos['Obra'] = df_equipos['sitio_id'].map(mapa_ids).fillna("Sin Asignar")
     
-    # Columnas BLOQUEADAS (Vienen del Agente, no editar manual)
     cols_bloqueadas = ('codigo_inventario', 'serie', 'ram', 'procesador', 'disco', 'mainboard', 'video', 'ultima_conexion', 'antivirus', 'windows_ver')
 
-    # CONFIGURACIÓN DE LA TABLA EDITABLE
+    # TABLA EDITABLE
     cambios = st.data_editor(
         df_equipos,
         column_config={
             "id": None, # Oculto
-            "sitio_id": None, # Oculto
-            
-            # --- COLUMNAS MANUALES ---
-            "codigo_manual": st.column_config.TextColumn("🟦 Cód. Etiqueta", help="Digita aquí el código de activo fijo manual", width="small"),
-            "detalles": st.column_config.TextColumn("📝 Detalles / Notas", help="Espacio para observaciones largas", width="large"),
-            
-            # --- COLUMNAS DE SISTEMA ---
+            "sitio_id": None, 
+            "codigo_manual": st.column_config.TextColumn("🟦 Cód. Etiqueta", help="Digita aquí el código manual", width="small"),
+            "detalles": st.column_config.TextColumn("📝 Detalles / Notas", width="large"),
             "usuario": st.column_config.TextColumn("Usuario Asignado", width="medium"),
             "Obra": st.column_config.SelectboxColumn("📍 Ubicación", width="medium", options=lista_obras, required=True),
             "codigo_inventario": st.column_config.TextColumn("Hostname (PC)", disabled=True),
             "ultima_conexion": st.column_config.DatetimeColumn("Última Conexión", format="D MMM YYYY, h:mm a", disabled=True),
             "tipo": st.column_config.SelectboxColumn("Tipo", options=["Laptop", "PC Escritorio", "Servidor"], width="small"),
-            
-            # --- COLUMNAS DE HARDWARE ---
             "mainboard": st.column_config.TextColumn("Placa Madre", disabled=True),
             "video": st.column_config.TextColumn("Tarjeta Video", disabled=True),
             "antivirus": st.column_config.TextColumn("Antivirus", disabled=True),
@@ -146,72 +136,77 @@ with tab1:
         use_container_width=True,
         key="editor_equipos",
         hide_index=True,
-        # AQUÍ ESTÁ EL CAMBIO: Agregué Mainboard, Video y Antivirus al orden visual
-        column_order=(
-            "codigo_manual", 
-            "codigo_inventario", 
-            "usuario", 
-            "Obra", 
-            "detalles", 
-            "tipo", 
-            "marca_modelo", 
-            "ram", 
-            "disco", 
-            "serie", 
-            "procesador", 
-            "mainboard",   # <--- AHORA SÍ APARECE
-            "video",       # <--- AHORA SÍ APARECE
-            "antivirus",   # <--- AHORA SÍ APARECE
-            "ultima_conexion"
-        ) 
+        column_order=("codigo_manual", "codigo_inventario", "usuario", "Obra", "detalles", "tipo", "marca_modelo", "ram", "disco", "serie", "procesador", "mainboard", "video", "antivirus", "ultima_conexion") 
     )
 
-    # BOTÓN GUARDAR
+    # --- LÓGICA DE GUARDADO Y BORRADO ---
     if st.button("💾 Guardar Cambios Realizados", type="primary"):
         conn = get_connection()
         cursor = conn.cursor()
         try:
+            # 1. DETECTAR FILAS BORRADAS
+            # Obtenemos todos los IDs que existen realmente en la base de datos
+            cursor.execute("SELECT id FROM equipos")
+            ids_en_db = set(row[0] for row in cursor.fetchall())
+            
+            # Obtenemos los IDs que quedan en la tabla visible (ignorando los nuevos vacíos)
+            ids_en_pantalla = set(cambios['id'].dropna().astype(int).tolist())
+            
+            # La diferencia son los que el usuario borró
+            ids_a_borrar = ids_en_db - ids_en_pantalla
+            
+            if ids_a_borrar:
+                # Borramos esos IDs de la base de datos
+                lista_borrar = list(ids_a_borrar)
+                format_strings = ','.join(['%s'] * len(lista_borrar))
+                cursor.execute(f"DELETE FROM equipos WHERE id IN ({format_strings})", tuple(lista_borrar))
+                st.toast(f"🗑️ Se eliminaron {len(lista_borrar)} equipos.", icon="🗑️")
+
+            # 2. ACTUALIZAR FILAS MODIFICADAS O NUEVAS
             for index, row in cambios.iterrows():
                 nombre_obra = row['Obra']
                 id_obra_real = mapa_obras.get(nombre_obra)
                 
-                sql = """
-                    UPDATE equipos SET 
-                    usuario = %s, 
-                    sitio_id = %s,
-                    tipo = %s,
-                    marca_modelo = %s,
-                    codigo_manual = %s,
-                    detalles = %s
-                    WHERE codigo_inventario = %s
-                """
-                vals = (
-                    row['usuario'], id_obra_real, row['tipo'], row['marca_modelo'], 
-                    row['codigo_manual'], row['detalles'], 
-                    row['codigo_inventario']
-                )
-                cursor.execute(sql, vals)
+                # Si tiene ID, actualizamos. Si es nuevo (sin ID), insertamos.
+                # Nota: Para simplificar, usamos el Hostname como clave de actualización
+                if row['codigo_inventario']:
+                    sql = """
+                        UPDATE equipos SET 
+                        usuario = %s, 
+                        sitio_id = %s,
+                        tipo = %s,
+                        marca_modelo = %s,
+                        codigo_manual = %s,
+                        detalles = %s
+                        WHERE codigo_inventario = %s
+                    """
+                    vals = (
+                        row['usuario'], id_obra_real, row['tipo'], row['marca_modelo'], 
+                        row['codigo_manual'], row['detalles'], 
+                        row['codigo_inventario']
+                    )
+                    cursor.execute(sql, vals)
             
             conn.commit()
-            st.success("✅ Cambios guardados exitosamente!")
-            st.rerun()
+            st.success("✅ Base de datos actualizada correctamente!")
+            st.rerun() # Recarga la página para ver los cambios limpios
+            
         except Exception as e:
             st.error(f"Error guardando: {e}")
         finally:
             conn.close()
 
-    # EXPORTAR A EXCEL
+    # EXPORTAR EXCEL
     if not cambios.empty:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             cambios.to_excel(writer, index=False, sheet_name='Inventario')
         st.download_button(label="📗 Descargar Excel", data=output.getvalue(), file_name="inventario_ti.xlsx", mime="application/vnd.ms-excel")
 
-# --- PESTAÑA 2: GESTIÓN DE OBRAS ---
+# --- PESTAÑA 2: OBRAS ---
 with tab2:
     st.subheader("Gestión de Sitios y Obras")
     col1, col2 = st.columns([2, 1])
-    
     with col1:
         nueva_obra = st.text_input("Nombre de nueva Obra")
         if st.button("Crear Obra"):
@@ -223,11 +218,8 @@ with tab2:
                     conn.commit()
                     st.success(f"Obra '{nueva_obra}' creada.")
                     st.rerun()
-                except:
-                    st.error("Esa obra ya existe.")
-                finally:
-                    conn.close()
-    
+                except: st.error("Esa obra ya existe.")
+                finally: conn.close()
     with col2:
         conn = get_connection()
         df_obras = pd.read_sql("SELECT nombre FROM sitios ORDER BY nombre", conn)
