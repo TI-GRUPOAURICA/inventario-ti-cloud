@@ -20,11 +20,11 @@ def get_connection():
     return mysql.connector.connect(**DB_CONFIG)
 
 def init_db():
-    """Actualiza la estructura de la BD para tener columnas separadas"""
+    """Actualiza la estructura de la BD automáticamente"""
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 1. Tabla Sitios (Igual que antes)
+    # 1. Tabla Sitios
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sitios (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -32,7 +32,7 @@ def init_db():
         );
     """)
     
-    # 2. Asegurar estados por defecto (LIBRE y DEFECTUOSA)
+    # 2. Asegurar estados por defecto
     estados = ["LIBRE", "DEFECTUOSA", "OFICINA CENTRAL"]
     for estado in estados:
         try:
@@ -40,7 +40,7 @@ def init_db():
         except: pass
     conn.commit()
 
-    # 3. Tabla Equipos (ACTUALIZADA con nuevas columnas)
+    # 3. Tabla Equipos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS equipos (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -54,7 +54,7 @@ def init_db():
         );
     """)
     
-    # 4. MIGRACIÓN: Agregar columnas nuevas si no existen
+    # 4. MIGRACIÓN: Agregar columnas nuevas (incluyendo las manuales)
     nuevas_columnas = [
         ("ram", "VARCHAR(50)"),
         ("procesador", "VARCHAR(100)"),
@@ -63,14 +63,17 @@ def init_db():
         ("video", "VARCHAR(150)"),
         ("antivirus", "VARCHAR(150)"),
         ("windows_ver", "VARCHAR(100)"),
-        ("ultima_conexion", "DATETIME")
+        ("ultima_conexion", "DATETIME"),
+        # --- NUEVAS COLUMNAS MANUALES ---
+        ("codigo_manual", "VARCHAR(50)"), # Para tu código de etiqueta
+        ("detalles", "TEXT")              # Para notas largas
     ]
     
     for col, tipo in nuevas_columnas:
         try:
             cursor.execute(f"ALTER TABLE equipos ADD COLUMN {col} {tipo}")
         except:
-            pass # La columna ya existe
+            pass 
 
     conn.commit()
     conn.close()
@@ -81,7 +84,7 @@ def init_db():
 st.set_page_config(page_title="Inventario TI", layout="wide", page_icon="🖥️")
 st.title("🖥️ Panel de Control de Inventario TI")
 
-# Inicializar DB y columnas
+# Inicializar DB
 init_db()
 
 # Pestañas
@@ -91,84 +94,97 @@ tab1, tab2 = st.tabs(["📋 Inventario General (Editable)", "🏗️ Gestión de
 with tab1:
     conn = get_connection()
     
-    # 1. Cargar Obras para el Dropdown
+    # Cargar Obras
     df_sitios = pd.read_sql("SELECT id, nombre FROM sitios ORDER BY nombre", conn)
     lista_obras = df_sitios['nombre'].tolist()
-    mapa_obras = dict(zip(df_sitios['nombre'], df_sitios['id'])) # Nombre -> ID
-    mapa_ids = dict(zip(df_sitios['id'], df_sitios['nombre']))   # ID -> Nombre
+    mapa_obras = dict(zip(df_sitios['nombre'], df_sitios['id'])) 
+    mapa_ids = dict(zip(df_sitios['id'], df_sitios['nombre']))
 
-    # 2. Cargar Equipos
+    # Cargar Equipos (Incluyendo las nuevas columnas manuales)
     query = """
         SELECT 
-            id, codigo_inventario, marca_modelo, usuario, tipo, 
-            ram, ultima_conexion, procesador, disco, serie, 
-            mainboard, video, antivirus, windows_ver, sitio_id
+            id, codigo_inventario, codigo_manual, marca_modelo, usuario, tipo, 
+            detalles, sitio_id, ultima_conexion, ram, procesador, disco, 
+            serie, mainboard, video, antivirus, windows_ver
         FROM equipos 
         ORDER BY ultima_conexion DESC
     """
     df_equipos = pd.read_sql(query, conn)
     conn.close()
 
-    # 3. Preparar DataFrame para el Editor
-    # Reemplazamos el ID numérico por el Nombre de la Obra para que sea fácil de leer/editar
+    # Preparar DataFrame
     df_equipos['Obra'] = df_equipos['sitio_id'].map(mapa_ids).fillna("Sin Asignar")
     
-    # Columnas que NO queremos que se editen manualmente (vienen del agente)
-    cols_bloqueadas = ('codigo_inventario', 'serie', 'ram', 'procesador', 'disco', 'mainboard', 'video', 'ultima_conexion')
+    # Columnas BLOQUEADAS (Vienen del Agente, no editar manual)
+    cols_bloqueadas = ('codigo_inventario', 'serie', 'ram', 'procesador', 'disco', 'mainboard', 'video', 'ultima_conexion', 'antivirus', 'windows_ver')
 
-    # 4. TABLA EDITABLE (Data Editor)
+    # CONFIGURACIÓN DE LA TABLA EDITABLE
     cambios = st.data_editor(
         df_equipos,
         column_config={
-            "id": None, # Ocultar ID
-            "ultima_conexion": st.column_config.DatetimeColumn("Última Conexión", format="D MMM YYYY, h:mm a", disabled=True),
+            "id": None, # Oculto
+            "sitio_id": None, # Oculto (usamos la columna 'Obra')
+            
+            # --- COLUMNAS MANUALES ---
+            "codigo_manual": st.column_config.TextColumn(
+                "🟦 Cód. Etiqueta", 
+                help="Digita aquí el código de activo fijo manual",
+                width="small"
+            ),
+            "detalles": st.column_config.TextColumn(
+                "📝 Detalles / Notas", 
+                help="Espacio para observaciones largas",
+                width="large"
+            ),
+            # -------------------------
+            
+            "usuario": st.column_config.TextColumn("Usuario Asignado", width="medium"),
             "Obra": st.column_config.SelectboxColumn(
-                "Ubicación / Obra",
-                help="Selecciona dónde está el equipo",
+                "📍 Ubicación",
                 width="medium",
-                options=lista_obras, # Aquí sale LIBRE, DEFECTUOSA, OBRAS...
+                options=lista_obras,
                 required=True
             ),
+            "codigo_inventario": st.column_config.TextColumn("Hostname (PC)", disabled=True, help="Nombre real del equipo en red"),
+            "ultima_conexion": st.column_config.DatetimeColumn("Última Conexión", format="D MMM YYYY, h:mm a", disabled=True),
             "tipo": st.column_config.SelectboxColumn("Tipo", options=["Laptop", "PC Escritorio", "Servidor"], width="small"),
-            "codigo_inventario": st.column_config.TextColumn("Hostname", disabled=True),
-            "serie": st.column_config.TextColumn("Serie", disabled=True),
         },
-        disabled=cols_bloqueadas, # Bloquear columnas de hardware
-        num_rows="dynamic",       # Permite agregar/borrar filas
+        disabled=cols_bloqueadas, 
+        num_rows="dynamic",       
         use_container_width=True,
         key="editor_equipos",
-        hide_index=True
+        hide_index=True,
+        column_order=("codigo_manual", "codigo_inventario", "usuario", "Obra", "detalles", "tipo", "marca_modelo", "ram", "disco", "serie", "ultima_conexion", "procesador") 
+        # ^ He reordenado las columnas para que las manuales salgan al principio
     )
 
-    # 5. BOTÓN GUARDAR CAMBIOS
+    # BOTÓN GUARDAR
     if st.button("💾 Guardar Cambios Realizados", type="primary"):
         conn = get_connection()
         cursor = conn.cursor()
         try:
-            # Detectar filas editadas
             for index, row in cambios.iterrows():
-                # Buscar el ID real de la obra seleccionada (Nombre -> ID)
                 nombre_obra = row['Obra']
                 id_obra_real = mapa_obras.get(nombre_obra)
                 
-                # Si es una fila nueva (no tiene ID en BD), la insertamos (manual)
-                # Nota: Streamlit maneja índices raros para filas nuevas, aquí nos enfocamos en UPDATE
-                # UPDATE basado en el 'codigo_inventario' o 'id' oculto si existiera.
-                # Simplificación: Actualizamos por Codigo Inventario (Hostname)
-                
+                # Actualizamos también las columnas manuales
                 sql = """
                     UPDATE equipos SET 
                     usuario = %s, 
                     sitio_id = %s,
                     tipo = %s,
-                    marca_modelo = %s
+                    marca_modelo = %s,
+                    codigo_manual = %s,
+                    detalles = %s
                     WHERE codigo_inventario = %s
                 """
-                cursor.execute(sql, (row['usuario'], id_obra_real, row['tipo'], row['marca_modelo'], row['codigo_inventario']))
-            
-            # Detectar filas borradas (Comparando DF original vs Editado es complejo en logica simple)
-            # Streamlit devuelve el estado final. Para borrado real se requiere logica de session state avanzada.
-            # Por ahora, el UPDATE funciona perfecto para cambios de Obra/Usuario.
+                # Nota: 'codigo_manual' y 'detalles' se guardan aquí
+                vals = (
+                    row['usuario'], id_obra_real, row['tipo'], row['marca_modelo'], 
+                    row['codigo_manual'], row['detalles'], 
+                    row['codigo_inventario']
+                )
+                cursor.execute(sql, vals)
             
             conn.commit()
             st.success("✅ Cambios guardados exitosamente!")
@@ -178,7 +194,7 @@ with tab1:
         finally:
             conn.close()
 
-    # 6. EXPORTAR A EXCEL
+    # EXPORTAR A EXCEL
     if not cambios.empty:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -211,3 +227,4 @@ with tab2:
         df_obras = pd.read_sql("SELECT nombre FROM sitios ORDER BY nombre", conn)
         conn.close()
         st.dataframe(df_obras, hide_index=True, use_container_width=True)
+
